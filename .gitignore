@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.tsbuildinfo
+web-ext-artifacts/
+*.log

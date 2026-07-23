@@ -1,0 +1,19 @@
+{
+  "name": "firefox-mcp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Firefox DevTools MCP Bridge — extension + Node MCP server",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @bridge/protocol && npm run build -w @bridge/server && npm run build -w @bridge/extension",
+    "typecheck": "tsc -b && tsc -p packages/extension/tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
