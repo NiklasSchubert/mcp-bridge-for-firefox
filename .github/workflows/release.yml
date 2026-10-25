@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check tag matches versions
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          manifest_version=$(node -p 'require("./packages/extension/static/manifest.json").version')
+          package_version=$(node -p 'require("./package.json").version')
+          if [ "$version" != "$manifest_version" ] || [ "$version" != "$package_version" ]; then
+            echo "tag $version, manifest.json $manifest_version, package.json $package_version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run bundle -w @bridge/server
+
+      - name: Sign extension (unlisted)
+        run: |
+          npx web-ext sign \
+            --source-dir packages/extension/dist \
+            --artifacts-dir web-ext-artifacts \
+            --channel unlisted \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET"
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+
+      - name: Collect release assets
+        run: |
+          mkdir release
+          mv web-ext-artifacts/*.xpi "release/firefox-mcp-bridge-$VERSION.xpi"
+          cp packages/server/bundle/bridge-server.mjs "release/bridge-server-$VERSION.mjs"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*

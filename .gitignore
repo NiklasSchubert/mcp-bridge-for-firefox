@@ -1,5 +1,6 @@
 node_modules/
 dist/
+bundle/
 *.tsbuildinfo
 web-ext-artifacts/
 *.log

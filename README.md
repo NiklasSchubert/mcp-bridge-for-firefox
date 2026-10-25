@@ -26,7 +26,7 @@ design.
 ## Requirements
 
 - **Node.js** ≥ 22 (server uses native TypeScript strip-types in dev)
-- **Firefox** ≥ 128
+- **Firefox** ≥ 140
 
 ## Install & build
 
@@ -135,6 +135,25 @@ otherwise calls return `NO_TAB_CONNECTED`.
 npm run typecheck    # tsc across all packages
 npm test             # vitest
 ```
+
+## Release
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`. It signs the extension on AMO as
+**unlisted** (never published on addons.mozilla.org) and attaches two assets to a GitHub
+Release:
+
+- `firefox-mcp-bridge-<version>.xpi` — signed extension, installable in release Firefox
+- `bridge-server-<version>.mjs` — self-contained server bundle, run with `node`
+
+Requires the repository secrets `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` (AMO Developer Hub →
+Manage API Keys).
+
+1. Bump `version` in `package.json` and `packages/extension/static/manifest.json`. AMO
+   rejects a version it has already signed, so every attempt needs a fresh one.
+2. `git tag vX.Y.Z && git push --tags`
+
+Build the server bundle locally with `npm run bundle -w @bridge/server` →
+`packages/server/bundle/bridge-server.mjs`.
 
 ## Troubleshooting
 
