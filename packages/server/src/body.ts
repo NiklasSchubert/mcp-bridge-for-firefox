@@ -31,7 +31,8 @@ export interface EncodedBody {
   truncated: boolean;
 }
 
-export interface BodyPaging {
+export interface Paging {
+  /** cap on emitted chars */
   maxBytes?: number;
   offset?: number;
 }
@@ -44,7 +45,7 @@ export interface BodyPaging {
 export function encodeBody(
   content: string,
   mimeType: string | undefined,
-  paging: BodyPaging = {},
+  paging: Paging = {},
 ): EncodedBody {
   const encoding = classifyMime(mimeType);
   let emitted: string;
@@ -67,7 +68,8 @@ export function encodeBody(
   };
 }
 
-function clampInt(n: number | undefined, fallback: number): number {
+/** Coerce to a safe finite non-negative integer, else `fallback`. */
+export function clampInt(n: number | undefined, fallback: number): number {
   if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return fallback;
   return Math.floor(n);
 }

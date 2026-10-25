@@ -25,20 +25,20 @@ design.
 
 ## Requirements
 
-- **Node.js** ≥ 22 (server uses native TypeScript strip-types in dev)
+- **Node.js** ≥ 22
 - **Firefox** ≥ 140
 
 ## Install & build
 
 ```sh
 npm install
-npm run build      # builds protocol, server, extension (in order)
+npm run build      # builds server and extension
 ```
 
 Individual packages:
 
 ```sh
-npm run build -w @bridge/server
+npm run build -w @bridge/server      # esbuild bundle → packages/server/bundle/bridge-server.mjs
 npm run build -w @bridge/extension   # esbuild bundle → packages/extension/dist/
 ```
 
@@ -48,21 +48,10 @@ The server speaks MCP over **stdio** and listens for the extension on
 `ws://127.0.0.1:8765`.
 
 ```sh
-npm run dev   -w @bridge/server           # run from source (no build step)
-# or
 npm run build -w @bridge/server && npm run start -w @bridge/server
 ```
 
-Change the WebSocket port with `--port=` or `BRIDGE_PORT` (default `8765`):
-
-```sh
-npm run dev -w @bridge/server -- --port=9000
-BRIDGE_PORT=9000 npm run start -w @bridge/server
-```
-
-> Note: stdout is the MCP channel — all logs go to stderr. If you change the port you must
-> also change it on the extension side (see below); the manifest CSP only whitelists
-> `8765` out of the box.
+> Note: stdout is the MCP channel — all logs go to stderr.
 
 ## 2. Load the extension in Firefox
 
@@ -89,11 +78,11 @@ Then, in the tab you want to inspect (a `http://localhost/*` or `http://127.0.0.
 The extension auto-dials the server; `session.hello` establishes the tab. Watch the server's
 stderr for `extension connected`.
 
-### Changing the port on the extension side
+### Changing the port
 
-The default port is defined in `packages/extension/src/internal.ts`
-(`DEFAULT_WS_PORT = 8765`) and whitelisted in the manifest CSP
-(`packages/extension/static/manifest.json`, `connect-src`). Update both, then rebuild.
+The port is defined once in `packages/shared/methods.ts` (`DEFAULT_WS_PORT = 8765`) and
+whitelisted in the manifest CSP (`packages/extension/static/manifest.json`, `connect-src`).
+Update both, then rebuild server and extension.
 
 ## 3. Integrate with opencode
 
@@ -107,23 +96,14 @@ it at the built server entry:
   "mcp": {
     "firefox-bridge": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/firefox-mcp-bridge/packages/server/dist/index.js"],
+      "command": ["node", "/absolute/path/to/firefox-mcp-bridge/packages/server/bundle/bridge-server.mjs"],
       "enabled": true
     }
   }
 }
 ```
 
-Requires `npm run build -w @bridge/server` first so `dist/index.js` exists. To run from
-source instead, use:
-
-```json
-"command": ["node", "--experimental-strip-types",
-            "/absolute/path/to/firefox-mcp-bridge/packages/server/src/index.ts"]
-```
-
-Set a custom port by appending `"--port=9000"` to the `command` array (and matching it in
-the extension).
+Requires `npm run build -w @bridge/server` first so the bundle exists.
 
 opencode launches the server itself over stdio — don't also run it manually. Load the
 extension and open DevTools (steps 1–2) so a tab is attached before invoking the tools;
@@ -132,7 +112,7 @@ otherwise calls return `NO_TAB_CONNECTED`.
 ## Development
 
 ```sh
-npm run typecheck    # tsc across all packages
+npm run typecheck    # tsc across shared, server, extension
 npm test             # vitest
 ```
 
@@ -152,7 +132,7 @@ Manage API Keys).
    rejects a version it has already signed, so every attempt needs a fresh one.
 2. `git tag vX.Y.Z && git push --tags`
 
-Build the server bundle locally with `npm run bundle -w @bridge/server` →
+Build the server bundle locally with `npm run build -w @bridge/server` →
 `packages/server/bundle/bridge-server.mjs`.
 
 ## Troubleshooting
@@ -162,7 +142,7 @@ Build the server bundle locally with `npm run bundle -w @bridge/server` →
 | `NO_TAB_CONNECTED` | DevTools not open on a served tab, or extension not connected. |
 | `NETWORK_INACTIVE` | Network panel never activated this session — open it once. |
 | `NO_MATCH` / `NO_SELECTION` | Selector matched nothing / no Inspector `$0` selection. |
-| Extension won't connect | Port mismatch (server vs `internal.ts`/manifest CSP), or page isn't `localhost`/`127.0.0.1`. |
+| Extension won't connect | Port mismatch (`DEFAULT_WS_PORT` vs manifest CSP), or page isn't `localhost`/`127.0.0.1`. |
 
 ## Limitations
 

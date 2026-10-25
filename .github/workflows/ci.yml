@@ -18,5 +18,4 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npm run bundle -w @bridge/server
       - run: npx web-ext lint --source-dir packages/extension/dist

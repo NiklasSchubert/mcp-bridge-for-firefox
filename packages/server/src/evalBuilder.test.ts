@@ -3,7 +3,6 @@ import {
   buildDumpSubtree,
   buildGetComputedStyles,
   buildGetElement,
-  buildGetSelectedElement,
   buildScreenshotProbe,
 } from "./evalBuilder.js";
 
@@ -115,16 +114,16 @@ describe("buildGetElement", () => {
   });
 });
 
-describe("buildGetSelectedElement", () => {
+describe("buildGetElement without selector", () => {
   it("NO_SELECTION when $0 absent", () => {
-    expect(run(buildGetSelectedElement(), { selected: null })).toEqual({
+    expect(run(buildGetElement(undefined), { selected: null })).toEqual({
       ok: false,
       code: "NO_SELECTION",
     });
   });
   it("serializes $0 when present", () => {
     const el = new FakeEl("A");
-    const r = run(buildGetSelectedElement(), { selected: el }) as any;
+    const r = run(buildGetElement(undefined), { selected: el }) as any;
     expect(r.ok).toBe(true);
     expect(r.element.tagName).toBe("a");
   });

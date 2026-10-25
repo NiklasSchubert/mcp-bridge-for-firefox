@@ -1,4 +1,4 @@
-import { BridgeError, ErrorCode, type DomEvalResult } from "@bridge/protocol";
+import { BridgeError, ErrorCode, type DomEvalResult } from "../../shared/index.js";
 
 /** A successful page-side payload always carries `ok: true`. */
 export interface OkPayload {

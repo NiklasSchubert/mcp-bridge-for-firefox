@@ -2,11 +2,10 @@ import {
   JSONRPC_VERSION,
   isErrorResponse,
   isNotification,
-  isRequest,
   isResponse,
   type JsonRpcId,
   type JsonRpcMessage,
-} from "@bridge/protocol";
+} from "../../shared/index.js";
 
 export type SendRaw = (msg: JsonRpcMessage) => void;
 export type NotificationHandler = (method: string, params: unknown) => void;
@@ -14,7 +13,7 @@ export type NotificationHandler = (method: string, params: unknown) => void;
 interface Pending {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
-  timer?: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 /** Default per-command timeout — a wedged extension must not hang a tool. */
@@ -40,14 +39,11 @@ export class JsonRpcPeer {
   request<R = unknown>(method: string, params: unknown): Promise<R> {
     const id = this.nextId++;
     return new Promise<R>((resolve, reject) => {
-      const timer =
-        this.timeoutMs > 0
-          ? setTimeout(() => {
-              this.pending.delete(id);
-              reject(new Error(`command ${method} timed out`));
-            }, this.timeoutMs)
-          : undefined;
-      if (timer && typeof timer.unref === "function") timer.unref();
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`command ${method} timed out`));
+      }, this.timeoutMs);
+      timer.unref();
       this.pending.set(id, {
         resolve: resolve as Pending["resolve"],
         reject,
@@ -63,40 +59,24 @@ export class JsonRpcPeer {
       const p = this.pending.get(msg.id);
       if (!p) return; // unknown/late response — drop
       this.pending.delete(msg.id);
-      if (p.timer) clearTimeout(p.timer);
+      clearTimeout(p.timer);
       if (isErrorResponse(msg)) {
-        const e = new Error(msg.error.message);
-        (e as Error & { data?: unknown; rpcCode?: number }).data =
-          msg.error.data;
-        (e as Error & { rpcCode?: number }).rpcCode = msg.error.code;
-        p.reject(e);
+        p.reject(new Error(msg.error.message));
       } else {
         p.resolve(msg.result);
       }
       return;
     }
-    if (isNotification(msg)) {
-      this.onNotification(msg.method, msg.params);
-      return;
-    }
-    if (isRequest(msg)) {
-      // The server does not currently accept inbound requests from the
-      // extension; ignore to stay forward-compatible.
-      return;
-    }
+    if (isNotification(msg)) this.onNotification(msg.method, msg.params);
   }
 
   /** Reject every in-flight command (connection dropped). */
   rejectAll(reason: string): void {
     const err = new Error(reason);
     for (const [, p] of this.pending) {
-      if (p.timer) clearTimeout(p.timer);
+      clearTimeout(p.timer);
       p.reject(err);
     }
     this.pending.clear();
-  }
-
-  get inFlight(): number {
-    return this.pending.size;
   }
 }

@@ -1,10 +1,4 @@
-import type { LeanEntry } from "@bridge/protocol";
-
-interface Held<E> {
-  id: string;
-  entry: E;
-  leanEntry: LeanEntry;
-}
+import type { LeanEntry } from "../../shared/index.js";
 
 /**
  * Devtools-side id→entry map + lean-entry replay buffer (SPEC §4, §5.3).
@@ -14,19 +8,16 @@ interface Held<E> {
  * Generic over the entry type to stay decoupled from the browser API.
  */
 export class NetworkStore<E = unknown> {
-  private order: string[] = [];
-  private readonly map = new Map<string, Held<E>>();
+  // Map keeps insertion order, and re-setting an existing key keeps its slot.
+  private readonly map = new Map<string, { entry: E; leanEntry: LeanEntry }>();
 
-  constructor(private readonly cap = 2000) {
-    if (cap < 1) throw new RangeError("store cap must be >= 1");
-  }
+  constructor(private readonly cap = 2000) {}
 
   add(id: string, entry: E, leanEntry: LeanEntry): void {
-    if (!this.map.has(id)) this.order.push(id);
-    this.map.set(id, { id, entry, leanEntry });
-    while (this.order.length > this.cap) {
-      const evicted = this.order.shift();
-      if (evicted !== undefined) this.map.delete(evicted);
+    this.map.set(id, { entry, leanEntry });
+    if (this.map.size > this.cap) {
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) this.map.delete(oldest);
     }
   }
 
@@ -34,24 +25,12 @@ export class NetworkStore<E = unknown> {
     return this.map.get(id)?.entry;
   }
 
-  has(id: string): boolean {
-    return this.map.has(id);
-  }
-
   clear(): void {
-    this.order = [];
     this.map.clear();
-  }
-
-  get size(): number {
-    return this.order.length;
   }
 
   /** Lean entries in insertion order, for hello replay. */
   replay(): { id: string; leanEntry: LeanEntry }[] {
-    return this.order.map((id) => {
-      const h = this.map.get(id)!;
-      return { id: h.id, leanEntry: h.leanEntry };
-    });
+    return [...this.map].map(([id, { leanEntry }]) => ({ id, leanEntry }));
   }
 }

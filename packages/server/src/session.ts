@@ -8,7 +8,7 @@ import {
   type NetworkRequestFinishedParams,
   type SessionHelloParams,
   type SessionNetworkStateParams,
-} from "@bridge/protocol";
+} from "../../shared/index.js";
 import { RequestBuffer, type RequestFilters, type ListResult } from "./buffer.js";
 
 export type SessionState =
@@ -41,29 +41,10 @@ const NO_TAB_HINT: Record<SessionState, string> = {
 export class SessionManager {
   private state: SessionState = "disconnected";
   private sessionId: string | undefined;
-  private tabId: number | undefined;
   private networkActive = false;
-  readonly buffer: RequestBuffer;
+  private readonly buffer = new RequestBuffer();
 
-  constructor(
-    private readonly send: CommandSender,
-    bufferCap = 2000,
-  ) {
-    this.buffer = new RequestBuffer(bufferCap);
-  }
-
-  getState(): SessionState {
-    return this.state;
-  }
-  getSessionId(): string | undefined {
-    return this.sessionId;
-  }
-  getTabId(): number | undefined {
-    return this.tabId;
-  }
-  isNetworkActive(): boolean {
-    return this.networkActive;
-  }
+  constructor(private readonly send: CommandSender) {}
 
   /** Send a server→ext command over the active connection. */
   command<R = unknown>(method: string, params: unknown): Promise<R> {
@@ -123,7 +104,6 @@ export class SessionManager {
       this.buffer.clear();
     }
     this.sessionId = p.sessionId;
-    this.tabId = p.tabId;
     this.networkActive = p.networkActive;
     this.state = "ready";
     // ack rides the server→ext command channel (SPEC §5.4)

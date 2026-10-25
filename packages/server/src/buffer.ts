@@ -1,4 +1,4 @@
-import type { LeanEntry } from "@bridge/protocol";
+import type { LeanEntry } from "../../shared/index.js";
 
 export interface RequestFilters {
   urlContains?: string;
@@ -23,52 +23,28 @@ export interface ListResult {
  * idempotent per id.
  */
 export class RequestBuffer {
-  private entries: LeanEntry[] = [];
-  private readonly index = new Map<string, LeanEntry>();
+  // Map keeps insertion order, and re-setting an existing key keeps its slot.
+  private readonly entries = new Map<string, LeanEntry>();
 
-  constructor(private readonly cap = 2000) {
-    if (cap < 1) throw new RangeError("buffer cap must be >= 1");
-  }
+  constructor(private readonly cap = 2000) {}
 
-  /** Append (or replace an existing id). Evicts oldest past the cap. */
   add(entry: LeanEntry): void {
-    if (this.index.has(entry.id)) {
-      // replace in place, preserve ordering
-      const i = this.entries.findIndex((e) => e.id === entry.id);
-      if (i >= 0) this.entries[i] = entry;
-      this.index.set(entry.id, entry);
-      return;
+    this.entries.set(entry.id, entry);
+    if (this.entries.size > this.cap) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) this.entries.delete(oldest);
     }
-    this.entries.push(entry);
-    this.index.set(entry.id, entry);
-    while (this.entries.length > this.cap) {
-      const evicted = this.entries.shift();
-      if (evicted) this.index.delete(evicted.id);
-    }
-  }
-
-  has(id: string): boolean {
-    return this.index.has(id);
-  }
-
-  get(id: string): LeanEntry | undefined {
-    return this.index.get(id);
   }
 
   /** Drop every entry (persist-off navigation flush, SPEC §4). */
   clear(): void {
-    this.entries = [];
-    this.index.clear();
-  }
-
-  get size(): number {
-    return this.entries.length;
+    this.entries.clear();
   }
 
   /** Filtered, insertion-ordered view for `list_requests`. */
   list(filters: RequestFilters = {}): ListResult {
     const { urlContains, method, status, resourceType, limit } = filters;
-    const matched = this.entries.filter((e) => {
+    const matched = [...this.entries.values()].filter((e) => {
       if (urlContains !== undefined && !e.url.includes(urlContains))
         return false;
       if (method !== undefined && e.method.toUpperCase() !== method.toUpperCase())
@@ -78,8 +54,7 @@ export class RequestBuffer {
         return false;
       return true;
     });
-    const entries =
-      limit !== undefined && limit >= 0 ? matched.slice(0, limit) : matched;
+    const entries = limit !== undefined ? matched.slice(0, limit) : matched;
     return { entries, matchCount: matched.length };
   }
 }

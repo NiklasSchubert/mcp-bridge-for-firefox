@@ -16,14 +16,13 @@ import {
   type LeanEntry,
   type NetworkGetContentParams,
   type NetworkGetContentResult,
-} from "@bridge/protocol";
-import { Internal, RpcError } from "./internal.js";
+} from "../../shared/index.js";
+import { RPC_ERROR_CODE, SOCKET_UP } from "./internal.js";
 import { NetworkStore } from "./networkStore.js";
 
-const BUFFER_CAP = 2000;
 const sessionId = crypto.randomUUID();
 const tabId = browser.devtools.inspectedWindow.tabId;
-const store = new NetworkStore<HarEntry>(BUFFER_CAP);
+const store = new NetworkStore<HarEntry>();
 
 let counter = 0; // monotonic, never reset on navigation (SPEC §5.3)
 let networkActive = false;
@@ -39,8 +38,8 @@ function notify(method: string, params: unknown): void {
 function respond(id: number, result: unknown): void {
   port.postMessage({ jsonrpc: JSONRPC_VERSION, id, result });
 }
-function respondError(id: number, code: number, message: string): void {
-  port.postMessage({ jsonrpc: JSONRPC_VERSION, id, error: { code, message } });
+function respondError(id: number, message: string): void {
+  port.postMessage({ jsonrpc: JSONRPC_VERSION, id, error: { code: RPC_ERROR_CODE, message } });
 }
 
 function setNetworkActive(active: boolean): void {
@@ -129,21 +128,16 @@ async function reconcileNavigation(): Promise<void> {
 
 port.onMessage.addListener((raw) => {
   const msg = raw as { method?: string; id?: number; params?: unknown };
-  if (msg.method === Internal.SOCKET_UP) {
+  if (msg.method === SOCKET_UP) {
     announceHello();
     return;
   }
-  if (msg.method === Internal.SOCKET_DOWN) return;
   if (typeof msg.id === "number" && typeof msg.method === "string") {
     const req = msg as JsonRpcRequest;
     // Guard the whole dispatch so every inbound id always gets a response,
     // even if a browser API rejects — otherwise the server command hangs.
     handleCommand(req).catch((e) =>
-      respondError(
-        req.id,
-        RpcError.INTERNAL,
-        e instanceof Error ? e.message : "command failed",
-      ),
+      respondError(req.id, e instanceof Error ? e.message : "command failed"),
     );
   }
 });
@@ -164,11 +158,7 @@ async function handleCommand(req: JsonRpcRequest): Promise<void> {
       return;
     }
     default:
-      respondError(
-        req.id,
-        RpcError.METHOD_NOT_FOUND,
-        `unknown method ${req.method}`,
-      );
+      respondError(req.id, `unknown method ${req.method}`);
   }
 }
 
@@ -176,7 +166,7 @@ async function handleGetContent(req: JsonRpcRequest): Promise<void> {
   const { id } = req.params as NetworkGetContentParams;
   const entry = store.get(id);
   if (!entry) {
-    respondError(req.id, RpcError.EXECUTION, ErrorCode.BODY_UNAVAILABLE);
+    respondError(req.id, ErrorCode.BODY_UNAVAILABLE);
     return;
   }
   try {
@@ -190,11 +180,7 @@ async function handleGetContent(req: JsonRpcRequest): Promise<void> {
     };
     respond(req.id, result);
   } catch (e) {
-    respondError(
-      req.id,
-      RpcError.EXECUTION,
-      e instanceof Error ? e.message : ErrorCode.BODY_UNAVAILABLE,
-    );
+    respondError(req.id, e instanceof Error ? e.message : ErrorCode.BODY_UNAVAILABLE);
   }
 }
 

@@ -10,8 +10,6 @@ const staticDir = resolve(here, "static");
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-// esbuild inlines @bridge/protocol into each bundle — a WebExtension can't
-// resolve node_modules workspace symlinks at runtime (SPEC §2).
 await build({
   entryPoints: {
     background: resolve(here, "src/background.ts"),

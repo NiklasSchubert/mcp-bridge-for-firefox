@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  BridgeError,
   Command,
   Notify,
   PROTOCOL_VERSION,
   type LeanEntry,
-} from "@bridge/protocol";
+} from "../../shared/index.js";
 import { SessionManager } from "./session.js";
 
 function lean(id: string): LeanEntry {
@@ -37,8 +36,7 @@ describe("SessionManager handshake", () => {
     const send = vi.fn().mockResolvedValue({});
     const sm = new SessionManager(send);
     hello(sm, "sess-a");
-    expect(sm.getState()).toBe("ready");
-    expect(sm.getTabId()).toBe(7);
+    expect(() => sm.assertReady()).not.toThrow();
     expect(send).toHaveBeenCalledWith(Command.SESSION_ACK, {
       protocolVersion: PROTOCOL_VERSION,
     });
@@ -65,7 +63,6 @@ describe("connection-level guards", () => {
     const sm = new SessionManager(vi.fn().mockResolvedValue({}));
     hello(sm, "sess-a", false);
     sm.handleNotification(Notify.SESSION_NETWORK_STATE, { active: true });
-    expect(sm.isNetworkActive()).toBe(true);
     expect(() => sm.assertNetworkActive()).not.toThrow();
   });
 
@@ -136,14 +133,17 @@ describe("lifecycle drops", () => {
     const sm = new SessionManager(vi.fn().mockResolvedValue({}));
     hello(sm, "sess-a", true);
     sm.handleNotification(Notify.SESSION_TAB_DISCONNECTED, {});
-    expect(sm.getState()).toBe("no-tab");
-    expect(() => sm.assertReady()).toThrow(BridgeError);
+    expect(() => sm.assertReady()).toThrowError(
+      expect.objectContaining({ message: expect.stringContaining("devtools closed") }),
+    );
   });
 
   it("socket close → disconnected", () => {
     const sm = new SessionManager(vi.fn().mockResolvedValue({}));
     hello(sm, "sess-a", true);
     sm.onSocketClose();
-    expect(sm.getState()).toBe("disconnected");
+    expect(() => sm.assertReady()).toThrowError(
+      expect.objectContaining({ message: expect.stringContaining("no extension connected") }),
+    );
   });
 });

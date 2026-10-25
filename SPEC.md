@@ -55,20 +55,20 @@ TypeScript monorepo, **npm workspaces**.
 ```
 firefox-mcp-bridge/
 ├── packages/
-│   ├── protocol/        # @bridge/protocol — shared JSON-RPC methods, param/result types, error codes
+│   ├── shared/          # plain folder — shared JSON-RPC methods, param/result types, error codes
 │   ├── server/          # @bridge/server   — Node MCP server (stdio→client, WS server→extension)
 │   └── extension/       # @bridge/extension — MV3 WebExtension (background + devtools page + panel)
-├── package.json         # workspace root: "workspaces": ["packages/*"]
+├── package.json         # workspace root: "workspaces": ["packages/server", "packages/extension"]
 └── SPEC.md
 ```
 
-- **`@bridge/protocol`** is imported by both `server` and `extension` — one source of truth
-  for the wire contract (method names, envelope types, the 7 error codes, tool param/result
-  shapes). Delivered as a real workspace package, not a path alias.
+- **`packages/shared/`** is imported by relative path from both `server` and `extension` —
+  one source of truth for the wire contract (method names, envelope types, the 7 error
+  codes, tool param/result shapes, WS port). No package, no build step: both sides bundle it.
 - **`@bridge/server`** depends on `@modelcontextprotocol/sdk` and a WS library (e.g. `ws`).
-- **`@bridge/extension`** is bundled with **esbuild**: a WebExtension can't resolve
-  `node_modules` workspace symlinks at runtime, so esbuild inlines `@bridge/protocol` into
-  the background / devtools-page / panel bundles. `web-ext` loads the esbuild output.
+- Both packages are bundled with **esbuild**, which inlines `shared/`. The server becomes
+  one self-contained `.mjs`; `web-ext` loads the extension's background / devtools-page
+  bundles.
 
 ---
 
@@ -272,14 +272,14 @@ MCP responses use `isError: true` + a typed `code`. Two origins:
 
 ## 7. Dev workflow
 
-1. **Server:** `npm run dev -w @bridge/server` — starts the MCP server (stdio) and the WS
-   server on the configured port (env/CLI, default e.g. `8765`).
+1. **Server:** `npm run build -w @bridge/server && npm run start -w @bridge/server` — starts
+   the MCP server (stdio) and the WS server on `DEFAULT_WS_PORT` (`8765`).
 2. **Extension:** `npm run build -w @bridge/extension` (esbuild bundle) then `web-ext run`
    (or load the temporary add-on via `about:debugging`). Open devtools on the target
    localhost tab and activate the **Network** panel at least once.
 3. **MCP client:** point it at the server command over stdio (standard MCP server config
    entry). The extension auto-dials the WS port; `session.hello` establishes the tab.
-4. Port must match on both sides (server CLI/env ↔ extension option/constant).
+4. The port is the shared `DEFAULT_WS_PORT` constant; the manifest CSP must allow it.
 
 ---
 

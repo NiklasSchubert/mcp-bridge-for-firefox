@@ -24,7 +24,6 @@ export interface JsonRpcNotification<M extends string = string, P = unknown> {
 export interface JsonRpcError {
   code: number;
   message: string;
-  data?: unknown;
 }
 
 export interface JsonRpcSuccessResponse<R = unknown> {

@@ -1,4 +1,4 @@
-import type { CaptureRect } from "@bridge/protocol";
+import type { CaptureRect } from "../../shared/index.js";
 
 export interface ViewportProbe {
   rect: { x: number; y: number; width: number; height: number };

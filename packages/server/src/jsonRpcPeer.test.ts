@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { JSONRPC_VERSION, type JsonRpcMessage } from "@bridge/protocol";
+import { JSONRPC_VERSION, type JsonRpcMessage } from "../../shared/index.js";
 import { JsonRpcPeer } from "./jsonRpcPeer.js";
 
 describe("JsonRpcPeer", () => {
@@ -29,7 +29,6 @@ describe("JsonRpcPeer", () => {
     peer.handleMessage({ jsonrpc: JSONRPC_VERSION, id: sent[0]!.id, result: "a" });
     await expect(a).resolves.toBe("a");
     await expect(b).resolves.toBe("b");
-    expect(peer.inFlight).toBe(0);
   });
 
   it("rejects on an error response", async () => {
@@ -60,13 +59,11 @@ describe("JsonRpcPeer", () => {
     const p = peer.request("dom.eval", {});
     peer.rejectAll("socket closed");
     await expect(p).rejects.toThrow("socket closed");
-    expect(peer.inFlight).toBe(0);
   });
 
   it("rejects a command that never gets a response (timeout)", async () => {
     const peer = new JsonRpcPeer(vi.fn(), vi.fn(), 20);
     await expect(peer.request("dom.eval", {})).rejects.toThrow(/timed out/);
-    expect(peer.inFlight).toBe(0);
   });
 
   it("ignores an unknown/late response", () => {

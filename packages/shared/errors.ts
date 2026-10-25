@@ -28,9 +28,3 @@ export class BridgeError extends Error {
     this.name = "BridgeError";
   }
 }
-
-/** Shape the execution-level error takes inside a command result payload. */
-export interface ExecErrorInfo {
-  code: ErrorCode;
-  message?: string;
-}

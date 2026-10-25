@@ -14,19 +14,14 @@
  * `errorInfo.isException` as EVAL_EXCEPTION as a fallback).
  */
 
-export interface HtmlPaging {
-  /** cap on serialized outerHTML length (chars) */
-  maxBytes?: number;
-  /** offset into outerHTML for paging */
-  offset?: number;
-}
+import { clampInt, type Paging } from "./body.js";
 
 const DEFAULT_HTML_CAP = 50_000;
 const DEFAULT_TEXT_CAP = 2_000;
 const DEFAULT_SUBTREE_DEPTH = 3;
 
 /** Curated common computed-style properties returned by default (SPEC §3). */
-export const CURATED_STYLE_PROPS = [
+const CURATED_STYLE_PROPS = [
   "display",
   "position",
   "top",
@@ -83,33 +78,31 @@ function wrap(body: string): string {
   return `(() => {\n  try {\n${PAGE_HELPERS}\n${body}\n  } catch (e) {\n    return { ok: false, code: "EVAL_EXCEPTION", message: String((e && e.message) || e) };\n  }\n})()`;
 }
 
-/** Coerce to a safe finite non-negative integer for embedding as a literal. */
-function num(n: number | undefined, fallback: number): number {
-  if (typeof n !== "number" || !Number.isFinite(n) || n < 0)
-    return fallback;
-  return Math.floor(n);
+/**
+ * Page-side statements binding `el` and `matchCount`, or returning a typed
+ * miss. An omitted selector targets the Inspector selection `$0`.
+ */
+function bindTarget(selector: string | undefined): string {
+  if (selector === undefined)
+    return `
+    if (typeof $0 === "undefined" || !($0 instanceof Element)) return { ok: false, code: "NO_SELECTION" };
+    const el = $0;
+    const matchCount = 1;`;
+  return `
+    const nodes = document.querySelectorAll(${JSON.stringify(selector)});
+    if (nodes.length === 0) return { ok: false, code: "NO_MATCH" };
+    const el = nodes[0];
+    const matchCount = nodes.length;`;
 }
 
 export function buildGetElement(
-  selector: string,
-  paging: HtmlPaging = {},
+  selector: string | undefined,
+  paging: Paging = {},
 ): string {
-  const sel = JSON.stringify(selector);
-  const cap = num(paging.maxBytes, DEFAULT_HTML_CAP);
-  const off = num(paging.offset, 0);
-  return wrap(`
-    const nodes = document.querySelectorAll(${sel});
-    if (nodes.length === 0) return { ok: false, code: "NO_MATCH" };
-    return { ok: true, matchCount: nodes.length, element: __serialize(nodes[0], ${cap}, ${off}) };
-  `);
-}
-
-export function buildGetSelectedElement(paging: HtmlPaging = {}): string {
-  const cap = num(paging.maxBytes, DEFAULT_HTML_CAP);
-  const off = num(paging.offset, 0);
-  return wrap(`
-    if (typeof $0 === "undefined" || $0 === null || !($0 instanceof Element)) return { ok: false, code: "NO_SELECTION" };
-    return { ok: true, matchCount: 1, element: __serialize($0, ${cap}, ${off}) };
+  const cap = clampInt(paging.maxBytes, DEFAULT_HTML_CAP);
+  const off = clampInt(paging.offset, 0);
+  return wrap(`${bindTarget(selector)}
+    return { ok: true, matchCount, element: __serialize(el, ${cap}, ${off}) };
   `);
 }
 
@@ -117,24 +110,21 @@ export function buildGetComputedStyles(
   selector: string,
   opts: { properties?: string[]; all?: boolean } = {},
 ): string {
-  const sel = JSON.stringify(selector);
   const propList = JSON.stringify(
     opts.properties && opts.properties.length > 0
       ? opts.properties
-      : [...CURATED_STYLE_PROPS],
+      : CURATED_STYLE_PROPS,
   );
   const all = opts.all === true;
-  return wrap(`
-    const nodes = document.querySelectorAll(${sel});
-    if (nodes.length === 0) return { ok: false, code: "NO_MATCH" };
-    const cs = getComputedStyle(nodes[0]);
+  return wrap(`${bindTarget(selector)}
+    const cs = getComputedStyle(el);
     const styles = {};
     if (${all}) {
       for (let i = 0; i < cs.length; i++) { const p = cs[i]; styles[p] = cs.getPropertyValue(p); }
     } else {
       for (const p of ${propList}) { styles[p] = cs.getPropertyValue(p); }
     }
-    return { ok: true, matchCount: nodes.length, styles };
+    return { ok: true, matchCount, styles };
   `);
 }
 
@@ -142,12 +132,9 @@ export function buildDumpSubtree(
   selector: string,
   depth: number = DEFAULT_SUBTREE_DEPTH,
 ): string {
-  const sel = JSON.stringify(selector);
-  const d = num(depth, DEFAULT_SUBTREE_DEPTH);
+  const d = clampInt(depth, DEFAULT_SUBTREE_DEPTH);
   const tcap = DEFAULT_TEXT_CAP;
-  return wrap(`
-    const root = document.querySelector(${sel});
-    if (!root) return { ok: false, code: "NO_MATCH" };
+  return wrap(`${bindTarget(selector)}
     let truncated = false;
     const walk = (el, remaining) => {
       const node = { tag: el.tagName.toLowerCase(), attributes: __attrs(el), children: [] };
@@ -162,7 +149,7 @@ export function buildDumpSubtree(
       for (const k of kids) node.children.push(walk(k, remaining - 1));
       return node;
     };
-    return { ok: true, matchCount: 1, tree: walk(root, ${d}), truncated };
+    return { ok: true, matchCount, tree: walk(el, ${d}), truncated };
   `);
 }
 
@@ -172,23 +159,10 @@ export function buildDumpSubtree(
  * viewport-relative rect plus scroll offsets so the server can convert to
  * document-relative CSS px.
  */
-export function buildScreenshotProbe(selector: string): string {
-  const sel = JSON.stringify(selector);
-  return wrap(`
-    const el = document.querySelector(${sel});
-    if (!el) return { ok: false, code: "NO_MATCH" };
+export function buildScreenshotProbe(selector: string | undefined): string {
+  return wrap(`${bindTarget(selector)}
     el.scrollIntoView({ block: "center", inline: "center" });
     const r = el.getBoundingClientRect();
-    return { ok: true, rect: { x:r.x, y:r.y, width:r.width, height:r.height }, scrollX: window.scrollX, scrollY: window.scrollY };
-  `);
-}
-
-/** Same probe for the Inspector selection `$0`. */
-export function buildScreenshotProbeSelected(): string {
-  return wrap(`
-    if (typeof $0 === "undefined" || $0 === null || !($0 instanceof Element)) return { ok: false, code: "NO_SELECTION" };
-    $0.scrollIntoView({ block: "center", inline: "center" });
-    const r = $0.getBoundingClientRect();
     return { ok: true, rect: { x:r.x, y:r.y, width:r.width, height:r.height }, scrollX: window.scrollX, scrollY: window.scrollY };
   `);
 }

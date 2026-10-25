@@ -1,7 +1,8 @@
-import type { ExecErrorInfo } from "./errors.js";
-
 /** Bumped whenever the wire contract changes incompatibly (SPEC §5.4). */
 export const PROTOCOL_VERSION = 1;
+
+/** WebSocket port the extension dials; must match the manifest CSP (SPEC §7). */
+export const DEFAULT_WS_PORT = 8765;
 
 // ── Method name constants ───────────────────────────────────────────────
 
@@ -25,11 +26,6 @@ export const Notify = {
 export type Notify = (typeof Notify)[keyof typeof Notify];
 
 // ── Command params / results ────────────────────────────────────────────
-
-export interface SessionAckParams {
-  protocolVersion: number;
-}
-export type SessionAckResult = Record<string, never>;
 
 export interface DomEvalParams {
   /** Opaque expression built server-side; the extension runs it verbatim. */
@@ -105,8 +101,6 @@ export interface SessionNetworkStateParams {
   active: boolean;
 }
 
-export type SessionTabDisconnectedParams = Record<string, never>;
-
 export interface NetworkRequestFinishedParams {
   id: string;
   leanEntry: LeanEntry;
@@ -131,5 +125,3 @@ export interface LeanEntry {
   durationMs: number;
   startedDateTime: string;
 }
-
-export type { ExecErrorInfo };

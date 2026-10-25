@@ -6,22 +6,22 @@ import {
   Command,
   ErrorCode,
   type CaptureFormat,
+  type CaptureRect,
   type CaptureTabResult,
   type DomEvalResult,
   type NetworkGetContentResult,
-} from "@bridge/protocol";
+} from "../../shared/index.js";
 import type { SessionManager } from "./session.js";
+import type { RequestFilters } from "./buffer.js";
 import { interpretDomResult } from "./dom.js";
 import {
   buildDumpSubtree,
   buildGetComputedStyles,
   buildGetElement,
-  buildGetSelectedElement,
   buildScreenshotProbe,
-  buildScreenshotProbeSelected,
 } from "./evalBuilder.js";
-import { toDocumentRect, type ViewportProbe } from "./rect.js";
-import { encodeBody } from "./body.js";
+import { toDocumentRect } from "./rect.js";
+import { encodeBody, type Paging } from "./body.js";
 
 // ── MCP result helpers ──────────────────────────────────────────────────
 
@@ -55,12 +55,38 @@ async function guard(fn: () => Promise<CallToolResult>): Promise<CallToolResult>
   }
 }
 
-// ── Shared paging schema ────────────────────────────────────────────────
+// ── Schemas ─────────────────────────────────────────────────────────────
 
 const paging = {
   maxBytes: z.number().int().nonnegative().optional(),
   offset: z.number().int().nonnegative().optional(),
 };
+
+const captureSchema = {
+  format: z.enum(["png", "jpeg"]).optional(),
+  quality: z.number().int().min(0).max(100).optional(),
+};
+
+const viewportProbeSchema = z.object({
+  rect: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number(),
+    height: z.number(),
+  }),
+  scrollX: z.number(),
+  scrollY: z.number(),
+});
+
+interface CaptureOptions {
+  format?: CaptureFormat;
+  quality?: number;
+}
+
+/** An omitted selector targets the Inspector selection `$0`. */
+interface Target {
+  selector?: string;
+}
 
 // ── Handlers (exported for unit testing) ────────────────────────────────
 
@@ -73,20 +99,20 @@ export function createToolHandlers(session: SessionManager) {
     return interpretDomResult(res);
   }
 
+  async function capture(opts: CaptureOptions, rect?: CaptureRect) {
+    const cap = await session.command<CaptureTabResult>(Command.CAPTURE_TAB, {
+      format: opts.format ?? "png",
+      quality: opts.quality,
+      rect,
+    });
+    return imageResult(cap.dataUrl);
+  }
+
   return {
-    list_requests: (filters?: {
-      urlContains?: string;
-      method?: string;
-      status?: number;
-      resourceType?: string;
-      limit?: number;
-    }): Promise<CallToolResult> =>
+    list_requests: (filters: RequestFilters = {}): Promise<CallToolResult> =>
       guard(async () => jsonResult(session.list(filters))),
 
-    get_request: (
-      id: string,
-      opts: { maxBytes?: number; offset?: number } = {},
-    ): Promise<CallToolResult> =>
+    get_request: ({ id, ...opts }: { id: string } & Paging): Promise<CallToolResult> =>
       guard(async () => {
         session.assertFreshId(id);
         let detail: NetworkGetContentResult;
@@ -115,36 +141,26 @@ export function createToolHandlers(session: SessionManager) {
         });
       }),
 
-    get_element: (
-      selector: string,
-      opts: { maxBytes?: number; offset?: number } = {},
-    ): Promise<CallToolResult> =>
+    get_element: ({ selector, ...opts }: Target & Paging = {}): Promise<CallToolResult> =>
       guard(async () => {
         const r = await domTool(buildGetElement(selector, opts));
         return jsonResult({ ...(r.element as object), matchCount: r.matchCount });
       }),
 
-    get_selected_element: (
-      opts: { maxBytes?: number; offset?: number } = {},
-    ): Promise<CallToolResult> =>
-      guard(async () => {
-        const r = await domTool(buildGetSelectedElement(opts));
-        return jsonResult({ ...(r.element as object), matchCount: r.matchCount });
-      }),
-
-    get_computed_styles: (
-      selector: string,
-      opts: { properties?: string[]; all?: boolean } = {},
-    ): Promise<CallToolResult> =>
+    get_computed_styles: ({
+      selector,
+      ...opts
+    }: {
+      selector: string;
+      properties?: string[];
+      all?: boolean;
+    }): Promise<CallToolResult> =>
       guard(async () => {
         const r = await domTool(buildGetComputedStyles(selector, opts));
         return jsonResult({ styles: r.styles, matchCount: r.matchCount });
       }),
 
-    dump_subtree: (
-      selector: string,
-      depth?: number,
-    ): Promise<CallToolResult> =>
+    dump_subtree: ({ selector, depth }: { selector: string; depth?: number }): Promise<CallToolResult> =>
       guard(async () => {
         const r = await domTool(buildDumpSubtree(selector, depth));
         return jsonResult({
@@ -154,80 +170,24 @@ export function createToolHandlers(session: SessionManager) {
         });
       }),
 
-    screenshot_viewport: (
-      opts: { format?: CaptureFormat; quality?: number } = {},
-    ): Promise<CallToolResult> =>
+    screenshot_viewport: (opts: CaptureOptions = {}): Promise<CallToolResult> =>
       guard(async () => {
         session.assertReady();
-        const cap = await session.command<CaptureTabResult>(Command.CAPTURE_TAB, {
-          format: opts.format ?? "png",
-          quality: opts.quality,
-        });
-        return imageResult(cap.dataUrl);
+        return capture(opts);
       }),
 
-    screenshot_element: (
-      selector: string,
-      opts: { format?: CaptureFormat; quality?: number } = {},
-    ): Promise<CallToolResult> =>
-      guard(async () =>
-        captureWithProbe(session, buildScreenshotProbe(selector), opts),
-      ),
-
-    screenshot_selected_element: (
-      opts: { format?: CaptureFormat; quality?: number } = {},
-    ): Promise<CallToolResult> =>
-      guard(async () =>
-        captureWithProbe(session, buildScreenshotProbeSelected(), opts),
-      ),
-  };
-}
-
-async function captureWithProbe(
-  session: SessionManager,
-  expression: string,
-  opts: { format?: CaptureFormat; quality?: number },
-): Promise<CallToolResult> {
-  session.assertReady();
-  const res = await session.command<DomEvalResult>(Command.DOM_EVAL, {
-    expression,
-  });
-  const probe = asViewportProbe(interpretDomResult(res));
-  const rect = toDocumentRect(probe);
-  const cap = await session.command<CaptureTabResult>(Command.CAPTURE_TAB, {
-    format: opts.format ?? "png",
-    quality: opts.quality,
-    rect,
-  });
-  return imageResult(cap.dataUrl);
-}
-
-/** Narrow an ok payload to a screenshot probe, or fail with a typed error. */
-function asViewportProbe(payload: Record<string, unknown>): ViewportProbe {
-  const rect = payload.rect as Record<string, unknown> | undefined;
-  if (
-    !rect ||
-    typeof rect.x !== "number" ||
-    typeof rect.y !== "number" ||
-    typeof rect.width !== "number" ||
-    typeof rect.height !== "number" ||
-    typeof payload.scrollX !== "number" ||
-    typeof payload.scrollY !== "number"
-  ) {
-    throw new BridgeError(
-      ErrorCode.EVAL_EXCEPTION,
-      "screenshot probe returned a malformed rect",
-    );
-  }
-  return {
-    rect: {
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-    },
-    scrollX: payload.scrollX,
-    scrollY: payload.scrollY,
+    screenshot_element: ({ selector, ...opts }: Target & CaptureOptions = {}): Promise<CallToolResult> =>
+      guard(async () => {
+        const probe = viewportProbeSchema.safeParse(
+          await domTool(buildScreenshotProbe(selector)),
+        );
+        if (!probe.success)
+          throw new BridgeError(
+            ErrorCode.EVAL_EXCEPTION,
+            "screenshot probe returned a malformed rect",
+          );
+        return capture(opts, toDocumentRect(probe.data));
+      }),
   };
 }
 
@@ -251,7 +211,7 @@ export function registerTools(server: McpServer, session: SessionManager): void 
         limit: z.number().int().positive().optional(),
       },
     },
-    async (args) => h.list_requests(args),
+    h.list_requests,
   );
 
   server.registerTool(
@@ -261,7 +221,7 @@ export function registerTools(server: McpServer, session: SessionManager): void 
         "Fetch full detail (headers + bodies) for one captured request by id.",
       inputSchema: { id: z.string(), ...paging },
     },
-    async ({ id, maxBytes, offset }) => h.get_request(id, { maxBytes, offset }),
+    h.get_request,
   );
 
   server.registerTool(
@@ -271,17 +231,16 @@ export function registerTools(server: McpServer, session: SessionManager): void 
         "Get the first element matching a CSS selector in the inspected page's main frame.",
       inputSchema: { selector: z.string(), ...paging },
     },
-    async ({ selector, maxBytes, offset }) =>
-      h.get_element(selector, { maxBytes, offset }),
+    h.get_element,
   );
 
   server.registerTool(
     "get_selected_element",
     {
       description: "Get the element currently selected in the Inspector ($0).",
-      inputSchema: { ...paging },
+      inputSchema: paging,
     },
-    async ({ maxBytes, offset }) => h.get_selected_element({ maxBytes, offset }),
+    h.get_element,
   );
 
   server.registerTool(
@@ -295,8 +254,7 @@ export function registerTools(server: McpServer, session: SessionManager): void 
         all: z.boolean().optional(),
       },
     },
-    async ({ selector, properties, all }) =>
-      h.get_computed_styles(selector, { properties, all }),
+    h.get_computed_styles,
   );
 
   server.registerTool(
@@ -309,18 +267,13 @@ export function registerTools(server: McpServer, session: SessionManager): void 
         depth: z.number().int().nonnegative().optional(),
       },
     },
-    async ({ selector, depth }) => h.dump_subtree(selector, depth),
+    h.dump_subtree,
   );
-
-  const captureSchema = {
-    format: z.enum(["png", "jpeg"]).optional(),
-    quality: z.number().int().min(0).max(100).optional(),
-  };
 
   server.registerTool(
     "screenshot_viewport",
     { description: "Screenshot the visible viewport of the inspected tab.", inputSchema: captureSchema },
-    async ({ format, quality }) => h.screenshot_viewport({ format, quality }),
+    h.screenshot_viewport,
   );
 
   server.registerTool(
@@ -330,17 +283,15 @@ export function registerTools(server: McpServer, session: SessionManager): void 
         "Screenshot a single element (scrolls it into view first) matched by selector.",
       inputSchema: { selector: z.string(), ...captureSchema },
     },
-    async ({ selector, format, quality }) =>
-      h.screenshot_element(selector, { format, quality }),
+    h.screenshot_element,
   );
 
   server.registerTool(
     "screenshot_selected_element",
     {
       description: "Screenshot the Inspector-selected element ($0).",
-      inputSchema: { ...captureSchema },
+      inputSchema: captureSchema,
     },
-    async ({ format, quality }) =>
-      h.screenshot_selected_element({ format, quality }),
+    h.screenshot_element,
   );
 }

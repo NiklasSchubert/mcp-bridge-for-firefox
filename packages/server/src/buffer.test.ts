@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LeanEntry } from "@bridge/protocol";
+import type { LeanEntry } from "../../shared/index.js";
 import { RequestBuffer } from "./buffer.js";
 
 function entry(id: string, over: Partial<LeanEntry> = {}): LeanEntry {
@@ -18,43 +18,30 @@ function entry(id: string, over: Partial<LeanEntry> = {}): LeanEntry {
 }
 
 describe("RequestBuffer", () => {
-  it("stores and retrieves by id", () => {
-    const b = new RequestBuffer();
-    b.add(entry("s.1"));
-    expect(b.has("s.1")).toBe(true);
-    expect(b.get("s.1")?.url).toBe("https://localhost/s.1");
-    expect(b.size).toBe(1);
-  });
+  const ids = (b: RequestBuffer) => b.list().entries.map((e) => e.id);
 
   it("FIFO-evicts the oldest past the cap", () => {
     const b = new RequestBuffer(2);
     b.add(entry("s.1"));
     b.add(entry("s.2"));
     b.add(entry("s.3"));
-    expect(b.size).toBe(2);
-    expect(b.has("s.1")).toBe(false); // evicted
-    expect(b.has("s.2")).toBe(true);
-    expect(b.has("s.3")).toBe(true);
+    expect(ids(b)).toEqual(["s.2", "s.3"]);
   });
 
-  it("replaying the same id is idempotent (no duplicate)", () => {
+  it("replaying the same id is idempotent (no duplicate, keeps position)", () => {
     const b = new RequestBuffer();
     b.add(entry("s.1", { status: 200 }));
+    b.add(entry("s.2"));
     b.add(entry("s.1", { status: 304 }));
-    expect(b.size).toBe(1);
-    expect(b.get("s.1")?.status).toBe(304);
+    expect(ids(b)).toEqual(["s.1", "s.2"]);
+    expect(b.list().entries[0]?.status).toBe(304);
   });
 
   it("clear empties the buffer", () => {
     const b = new RequestBuffer();
     b.add(entry("s.1"));
     b.clear();
-    expect(b.size).toBe(0);
-    expect(b.has("s.1")).toBe(false);
-  });
-
-  it("rejects an invalid cap", () => {
-    expect(() => new RequestBuffer(0)).toThrow(RangeError);
+    expect(b.list().matchCount).toBe(0);
   });
 
   describe("list filters", () => {

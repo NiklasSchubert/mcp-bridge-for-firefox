@@ -4,7 +4,7 @@ import {
   Notify,
   PROTOCOL_VERSION,
   type LeanEntry,
-} from "@bridge/protocol";
+} from "../../shared/index.js";
 import { SessionManager } from "./session.js";
 import { createToolHandlers } from "./tools.js";
 
@@ -77,7 +77,7 @@ describe("get_request", () => {
         };
       return {};
     });
-    const res = await handlers.get_request("sess.1");
+    const res = await handlers.get_request({ id: "sess.1" });
     const p = payload(res);
     expect(p.responseBody).toBe('{"ok":1}');
     expect(p.encoding).toBe("utf8");
@@ -90,7 +90,7 @@ describe("get_request", () => {
       if (m === Command.NETWORK_GET_CONTENT) called = true;
       return {};
     });
-    const res = await handlers.get_request("other.1");
+    const res = await handlers.get_request({ id: "other.1" });
     expect(payload(res).code).toBe("STALE_SESSION");
     expect(called).toBe(false);
   });
@@ -101,7 +101,7 @@ describe("get_request", () => {
         return Promise.reject(new Error("evicted"));
       return {};
     });
-    const res = await handlers.get_request("sess.9");
+    const res = await handlers.get_request({ id: "sess.9" });
     expect(payload(res).code).toBe("BODY_UNAVAILABLE");
   });
 });
@@ -113,7 +113,7 @@ describe("DOM tools", () => {
         return [{ ok: true, matchCount: 3, element: { tagName: "div", attributes: {} } }];
       return {};
     });
-    const p = payload(await handlers.get_element("div"));
+    const p = payload(await handlers.get_element({ selector: "div" }));
     expect(p.tagName).toBe("div");
     expect(p.matchCount).toBe(3);
   });
@@ -123,7 +123,7 @@ describe("DOM tools", () => {
       if (m === Command.DOM_EVAL) return [{ ok: false, code: "NO_MATCH" }];
       return {};
     });
-    const res = await handlers.get_element("nope");
+    const res = await handlers.get_element({ selector: "nope" });
     expect(res.isError).toBe(true);
     expect(payload(res).code).toBe("NO_MATCH");
   });
@@ -133,7 +133,7 @@ describe("DOM tools", () => {
       if (m === Command.DOM_EVAL) return [{ ok: false, code: "NO_SELECTION" }];
       return {};
     });
-    expect(payload(await handlers.get_selected_element()).code).toBe("NO_SELECTION");
+    expect(payload(await handlers.get_element()).code).toBe("NO_SELECTION");
   });
 
   it("NO_TAB_CONNECTED when session not ready", async () => {
@@ -142,7 +142,7 @@ describe("DOM tools", () => {
       return {};
     });
     sm.handleNotification(Notify.SESSION_TAB_DISCONNECTED, {});
-    const res = await handlers.get_element("div");
+    const res = await handlers.get_element({ selector: "div" });
     expect(payload(res).code).toBe("NO_TAB_CONNECTED");
   });
 });
@@ -175,7 +175,7 @@ describe("screenshots", () => {
       }
       return {};
     });
-    const res = await handlers.screenshot_element("#el");
+    const res = await handlers.screenshot_element({ selector: "#el" });
     expect((res.content[0] as any).data).toBe("BBBB");
     expect(capturedRect).toEqual({ x: 15, y: 120, width: 30, height: 40 });
   });
@@ -185,7 +185,7 @@ describe("screenshots", () => {
       if (m === Command.DOM_EVAL) return [{ ok: false, code: "NO_MATCH" }];
       return {};
     });
-    const res = await handlers.screenshot_element("#missing");
+    const res = await handlers.screenshot_element({ selector: "#missing" });
     expect(payload(res).code).toBe("NO_MATCH");
   });
 });

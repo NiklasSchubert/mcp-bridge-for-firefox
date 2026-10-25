@@ -15,14 +15,15 @@
  */
 import {
   Command,
+  DEFAULT_WS_PORT,
   JSONRPC_VERSION,
   Notify,
   isRequest,
   type CaptureTabParams,
   type JsonRpcMessage,
   type JsonRpcRequest,
-} from "@bridge/protocol";
-import { DEFAULT_WS_PORT, Internal, RpcError } from "./internal.js";
+} from "../../shared/index.js";
+import { RPC_ERROR_CODE, SOCKET_UP } from "./internal.js";
 
 const WS_URL = `ws://127.0.0.1:${DEFAULT_WS_PORT}`;
 const BACKOFF_BASE_MS = 500;
@@ -42,8 +43,8 @@ function sendToServer(msg: JsonRpcMessage): void {
   }
 }
 
-function respondError(id: number, code: number, message: string): void {
-  sendToServer({ jsonrpc: JSONRPC_VERSION, id, error: { code, message } });
+function respondError(id: number, message: string): void {
+  sendToServer({ jsonrpc: JSONRPC_VERSION, id, error: { code: RPC_ERROR_CODE, message } });
 }
 
 function connect(): void {
@@ -64,7 +65,7 @@ function connect(): void {
     // tell the devtools page to (re)announce hello + replay its buffer.
     devtoolsPort?.postMessage({
       jsonrpc: JSONRPC_VERSION,
-      method: Internal.SOCKET_UP,
+      method: SOCKET_UP,
       params: {},
     });
   });
@@ -82,22 +83,11 @@ function connect(): void {
   ws.addEventListener("close", () => {
     if (socket !== ws) return; // stale socket; a newer one is already live
     socket = undefined;
-    devtoolsPort?.postMessage({
-      jsonrpc: JSONRPC_VERSION,
-      method: Internal.SOCKET_DOWN,
-      params: {},
-    });
     scheduleReconnect();
   });
 
-  ws.addEventListener("error", () => {
-    // 'close' will follow; reconnect handled there.
-    try {
-      ws.close();
-    } catch {
-      /* ignore */
-    }
-  });
+  // 'close' follows; reconnect is handled there.
+  ws.addEventListener("error", () => ws.close());
 }
 
 function scheduleReconnect(): void {
@@ -121,13 +111,12 @@ function handleServerMessage(msg: JsonRpcMessage): void {
     return;
   }
   // session.ack / dom.* / network.* → forward verbatim to devtools page.
-  if (req.method === Notify.SESSION_HELLO) return; // never server→ext
   devtoolsPort?.postMessage(req);
 }
 
 async function handleCapture(req: JsonRpcRequest): Promise<void> {
   if (inspectedTabId === undefined) {
-    respondError(req.id, RpcError.NO_INSPECTED_TAB, "no inspected tab");
+    respondError(req.id, "no inspected tab");
     return;
   }
   const p = req.params as CaptureTabParams;
@@ -139,11 +128,7 @@ async function handleCapture(req: JsonRpcRequest): Promise<void> {
     });
     sendToServer({ jsonrpc: JSONRPC_VERSION, id: req.id, result: { dataUrl } });
   } catch (e) {
-    respondError(
-      req.id,
-      RpcError.CAPTURE_FAILED,
-      e instanceof Error ? e.message : "capture failed",
-    );
+    respondError(req.id, e instanceof Error ? e.message : "capture failed");
   }
 }
 
@@ -180,7 +165,7 @@ browser.runtime.onConnect.addListener((port) => {
 
   // A devtools page just attached — open (or reuse) the socket.
   if (socket && socket.readyState === WebSocket.OPEN) {
-    port.postMessage({ jsonrpc: JSONRPC_VERSION, method: Internal.SOCKET_UP, params: {} });
+    port.postMessage({ jsonrpc: JSONRPC_VERSION, method: SOCKET_UP, params: {} });
   } else {
     backoff = BACKOFF_BASE_MS;
     connect();

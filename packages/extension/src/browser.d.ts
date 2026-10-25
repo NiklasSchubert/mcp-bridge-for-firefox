@@ -12,7 +12,7 @@ interface HarRequest {
   method: string;
   url: string;
   headers: HarHeader[];
-  postData?: { text?: string; mimeType?: string };
+  postData?: { text?: string };
 }
 
 interface HarResponse {
@@ -41,7 +41,6 @@ interface RuntimePort {
   postMessage(msg: unknown): void;
   onMessage: { addListener(cb: (msg: unknown) => void): void };
   onDisconnect: { addListener(cb: () => void): void };
-  disconnect(): void;
 }
 
 interface EvalExceptionInfo {
@@ -55,7 +54,6 @@ interface CaptureOptions {
   format?: "png" | "jpeg";
   quality?: number;
   rect?: { x: number; y: number; width: number; height: number };
-  scale?: number;
 }
 
 interface Browser {

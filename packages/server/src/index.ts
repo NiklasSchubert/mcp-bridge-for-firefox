@@ -5,16 +5,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   BridgeError,
+  DEFAULT_WS_PORT,
   ErrorCode,
   type JsonRpcMessage,
-} from "@bridge/protocol";
+} from "../../shared/index.js";
 import { SessionManager, type CommandSender } from "./session.js";
 import { JsonRpcPeer } from "./jsonRpcPeer.js";
 import { registerTools } from "./tools.js";
 
-const DEFAULT_PORT = 8765;
-const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_BUFFER_CAP = 2000;
+const HOST = "127.0.0.1";
 
 /**
  * stdout is the MCP channel — all diagnostics go to stderr. Clients like
@@ -35,18 +34,7 @@ function log(...args: unknown[]): void {
   }
 }
 
-function resolvePort(): number {
-  const fromArg = process.argv
-    .find((a) => a.startsWith("--port="))
-    ?.slice("--port=".length);
-  const raw = fromArg ?? process.env.BRIDGE_PORT;
-  const n = raw ? Number.parseInt(raw, 10) : DEFAULT_PORT;
-  return Number.isFinite(n) && n > 0 && n < 65536 ? n : DEFAULT_PORT;
-}
-
 async function main(): Promise<void> {
-  const port = resolvePort();
-
   // The active extension WS connection (single tab, SPEC §1). Commands route
   // to whichever peer is currently attached; none → NO_TAB_CONNECTED.
   let activePeer: JsonRpcPeer | undefined;
@@ -55,7 +43,7 @@ async function main(): Promise<void> {
       ? activePeer.request(method, params)
       : Promise.reject(new BridgeError(ErrorCode.NO_TAB_CONNECTED));
 
-  const session = new SessionManager(sendCommand, DEFAULT_BUFFER_CAP);
+  const session = new SessionManager(sendCommand);
 
   const mcp = new McpServer({
     name: "firefox-mcp-bridge",
@@ -64,16 +52,15 @@ async function main(): Promise<void> {
   registerTools(mcp, session);
 
   // ── WebSocket server (the extension dials in) ─────────────────────────
-  const wss = new WebSocketServer({ port, host: DEFAULT_HOST });
-  wss.on("listening", () => log(`WS server listening on ws://${DEFAULT_HOST}:${port}`));
+  const wss = new WebSocketServer({ port: DEFAULT_WS_PORT, host: HOST });
+  wss.on("listening", () => log(`WS server listening on ws://${HOST}:${DEFAULT_WS_PORT}`));
   wss.on("error", (err: NodeJS.ErrnoException) => {
     // A failed bind (e.g. EADDRINUSE from a leftover server) leaves us running
     // headless on stdio: no extension can ever attach, so every tool errors
     // with NO_TAB_CONNECTED. Fail loudly instead of hiding the cause.
     if (err.code === "EADDRINUSE") {
       log(
-        `FATAL: port ${port} already in use — another bridge server is running. ` +
-          `Stop it or set BRIDGE_PORT to a free port.`,
+        `FATAL: port ${DEFAULT_WS_PORT} already in use — another bridge server is running. Stop it.`,
       );
       process.exit(1);
     }
