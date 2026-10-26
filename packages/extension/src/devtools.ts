@@ -11,13 +11,21 @@ import {
   JSONRPC_VERSION,
   Notify,
   PROTOCOL_VERSION,
+  type DevtoolsHelloParams,
   type DomEvalParams,
   type JsonRpcRequest,
   type LeanEntry,
   type NetworkGetContentParams,
   type NetworkGetContentResult,
 } from "../../shared/index.js";
-import { RPC_ERROR_CODE, SOCKET_UP } from "./internal.js";
+import {
+  ANNOUNCE,
+  PORT_NAME_PREFIX,
+  RPC_ERROR_CODE,
+  SOCKET_UP,
+  type AnnounceParams,
+  type SocketUpParams,
+} from "./internal.js";
 import { NetworkStore } from "./networkStore.js";
 
 const sessionId = crypto.randomUUID();
@@ -28,7 +36,7 @@ let counter = 0; // monotonic, never reset on navigation (SPEC §5.3)
 let networkActive = false;
 let totalSeen = 0; // entries seen this session, for persist-log inference
 
-const port = browser.runtime.connect({ name: "bridge" });
+const port = browser.runtime.connect({ name: `${PORT_NAME_PREFIX}${tabId}` });
 
 // ── outbound helpers ────────────────────────────────────────────────────
 
@@ -50,18 +58,27 @@ function setNetworkActive(active: boolean): void {
 
 // ── session announce + replay ───────────────────────────────────────────
 
-function announceHello(): void {
-  notify(Notify.SESSION_HELLO, {
+function announce(server: number): void {
+  const hello: DevtoolsHelloParams = {
     protocolVersion: PROTOCOL_VERSION,
     sessionId,
-    tabId,
     networkActive,
-  });
-  // replay buffered lean entries so a restarted (empty) server rebuilds its
-  // buffer with the same ids (SPEC §5.4).
-  for (const { id, leanEntry } of store.replay()) {
-    notify(Notify.NETWORK_REQUEST_FINISHED, { id, leanEntry });
-  }
+  };
+  // replay buffered lean entries so a newly found or restarted (empty)
+  // server rebuilds its buffer with the same ids (SPEC §5.4).
+  const replay = store.replay().map((params) => ({
+    jsonrpc: JSONRPC_VERSION,
+    method: Notify.NETWORK_REQUEST_FINISHED,
+    params,
+  }));
+  const params: AnnounceParams = {
+    server,
+    messages: [
+      { jsonrpc: JSONRPC_VERSION, method: Notify.SESSION_HELLO, params: hello },
+      ...replay,
+    ],
+  };
+  port.postMessage({ jsonrpc: JSONRPC_VERSION, method: ANNOUNCE, params });
 }
 
 // ── network capture ─────────────────────────────────────────────────────
@@ -129,7 +146,7 @@ async function reconcileNavigation(): Promise<void> {
 port.onMessage.addListener((raw) => {
   const msg = raw as { method?: string; id?: number; params?: unknown };
   if (msg.method === SOCKET_UP) {
-    announceHello();
+    announce((msg.params as SocketUpParams).server);
     return;
   }
   if (typeof msg.id === "number" && typeof msg.method === "string") {

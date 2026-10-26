@@ -11,7 +11,7 @@ import {
   type DomEvalResult,
   type NetworkGetContentResult,
 } from "../../shared/index.js";
-import type { SessionManager } from "./session.js";
+import type { TabRegistry, TabSession } from "./session.js";
 import type { RequestFilters } from "./buffer.js";
 import { interpretDomResult } from "./dom.js";
 import {
@@ -90,16 +90,15 @@ interface Target {
 
 // ── Handlers (exported for unit testing) ────────────────────────────────
 
-export function createToolHandlers(session: SessionManager) {
-  async function domTool(expression: string) {
-    session.assertReady(); // NO_TAB_CONNECTED resolved server-side, no round-trip
+export function createToolHandlers(registry: TabRegistry) {
+  async function domTool(session: TabSession, expression: string) {
     const res = await session.command<DomEvalResult>(Command.DOM_EVAL, {
       expression,
     });
     return interpretDomResult(res);
   }
 
-  async function capture(opts: CaptureOptions, rect?: CaptureRect) {
+  async function capture(session: TabSession, opts: CaptureOptions, rect?: CaptureRect) {
     const cap = await session.command<CaptureTabResult>(Command.CAPTURE_TAB, {
       format: opts.format ?? "png",
       quality: opts.quality,
@@ -109,11 +108,18 @@ export function createToolHandlers(session: SessionManager) {
   }
 
   return {
+    list_tabs: (): Promise<CallToolResult> =>
+      guard(async () => jsonResult({ tabs: registry.list() })),
+
+    select_tab: ({ tab }: { tab: string }): Promise<CallToolResult> =>
+      guard(async () => jsonResult(registry.select(tab))),
+
     list_requests: (filters: RequestFilters = {}): Promise<CallToolResult> =>
-      guard(async () => jsonResult(session.list(filters))),
+      guard(async () => jsonResult(registry.current().list(filters))),
 
     get_request: ({ id, ...opts }: { id: string } & Paging): Promise<CallToolResult> =>
       guard(async () => {
+        const session = registry.current();
         session.assertFreshId(id);
         let detail: NetworkGetContentResult;
         try {
@@ -143,7 +149,7 @@ export function createToolHandlers(session: SessionManager) {
 
     get_element: ({ selector, ...opts }: Target & Paging = {}): Promise<CallToolResult> =>
       guard(async () => {
-        const r = await domTool(buildGetElement(selector, opts));
+        const r = await domTool(registry.current(), buildGetElement(selector, opts));
         return jsonResult({ ...(r.element as object), matchCount: r.matchCount });
       }),
 
@@ -156,13 +162,13 @@ export function createToolHandlers(session: SessionManager) {
       all?: boolean;
     }): Promise<CallToolResult> =>
       guard(async () => {
-        const r = await domTool(buildGetComputedStyles(selector, opts));
+        const r = await domTool(registry.current(), buildGetComputedStyles(selector, opts));
         return jsonResult({ styles: r.styles, matchCount: r.matchCount });
       }),
 
     dump_subtree: ({ selector, depth }: { selector: string; depth?: number }): Promise<CallToolResult> =>
       guard(async () => {
-        const r = await domTool(buildDumpSubtree(selector, depth));
+        const r = await domTool(registry.current(), buildDumpSubtree(selector, depth));
         return jsonResult({
           tree: r.tree,
           truncated: r.truncated,
@@ -171,22 +177,20 @@ export function createToolHandlers(session: SessionManager) {
       }),
 
     screenshot_viewport: (opts: CaptureOptions = {}): Promise<CallToolResult> =>
-      guard(async () => {
-        session.assertReady();
-        return capture(opts);
-      }),
+      guard(async () => capture(registry.current(), opts)),
 
     screenshot_element: ({ selector, ...opts }: Target & CaptureOptions = {}): Promise<CallToolResult> =>
       guard(async () => {
+        const session = registry.current();
         const probe = viewportProbeSchema.safeParse(
-          await domTool(buildScreenshotProbe(selector)),
+          await domTool(session, buildScreenshotProbe(selector)),
         );
         if (!probe.success)
           throw new BridgeError(
             ErrorCode.EVAL_EXCEPTION,
             "screenshot probe returned a malformed rect",
           );
-        return capture(opts, toDocumentRect(probe.data));
+        return capture(session, opts, toDocumentRect(probe.data));
       }),
   };
 }
@@ -195,8 +199,28 @@ export type ToolHandlers = ReturnType<typeof createToolHandlers>;
 
 // ── MCP registration ────────────────────────────────────────────────────
 
-export function registerTools(server: McpServer, session: SessionManager): void {
-  const h = createToolHandlers(session);
+export function registerTools(server: McpServer, registry: TabRegistry): void {
+  const h = createToolHandlers(registry);
+
+  server.registerTool(
+    "list_tabs",
+    {
+      description:
+        "List browser tabs with DevTools open, across all Firefox profiles. `tab` is `<profile-instance>:<tabId>`; tabs sharing the prefix are in the same profile.",
+      inputSchema: {},
+    },
+    h.list_tabs,
+  );
+
+  server.registerTool(
+    "select_tab",
+    {
+      description:
+        "Choose the tab (a `tab` value from list_tabs) every other tool in this session operates on. Required before any other tool.",
+      inputSchema: { tab: z.string() },
+    },
+    h.select_tab,
+  );
 
   server.registerTool(
     "list_requests",

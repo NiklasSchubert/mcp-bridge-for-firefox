@@ -56,13 +56,27 @@ interface CaptureOptions {
   rect?: { x: number; y: number; width: number; height: number };
 }
 
+interface BrowserTab {
+  id?: number;
+  url?: string;
+  title?: string;
+  cookieStoreId?: string;
+}
+
 interface Browser {
   runtime: {
     connect(info: { name: string }): RuntimePort;
+    getURL(path: string): string;
     onConnect: { addListener(cb: (port: RuntimePort) => void): void };
   };
   tabs: {
+    get(tabId: number): Promise<BrowserTab>;
     captureTab(tabId: number, options?: CaptureOptions): Promise<string>;
+    onUpdated: {
+      addListener(
+        cb: (tabId: number, changeInfo: { url?: string; title?: string }, tab: BrowserTab) => void,
+      ): void;
+    };
   };
   devtools: {
     inspectedWindow: {

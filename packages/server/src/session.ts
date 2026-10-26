@@ -8,63 +8,55 @@ import {
   type NetworkRequestFinishedParams,
   type SessionHelloParams,
   type SessionNetworkStateParams,
+  type SessionTabUpdatedParams,
+  type TabInfo,
 } from "../../shared/index.js";
 import { RequestBuffer, type RequestFilters, type ListResult } from "./buffer.js";
-
-export type SessionState =
-  | "disconnected" // no WS connection
-  | "handshaking" // WS up, awaiting session.hello
-  | "ready" // devtools session attached
-  | "no-tab"; // devtools closed, WS still up
 
 export type CommandSender = (
   method: string,
   params: unknown,
 ) => Promise<unknown>;
 
-/** Per-state explanation for a NO_TAB_CONNECTED, so the client sees the cause. */
-const NO_TAB_HINT: Record<SessionState, string> = {
-  disconnected: "no extension connected — is Firefox open with the bridge extension loaded?",
-  handshaking: "extension connected but session.hello not completed yet — retry shortly",
-  "no-tab": "devtools closed — open devtools on the target tab",
-  ready: "ready", // unreachable from assertReady
-};
+export interface TabSummary extends TabInfo {
+  tab: string;
+  container?: string;
+  networkActive: boolean;
+  selected: boolean;
+}
+
+const INSTANCE_PREFIX_LENGTH = 8;
+
+/** Unique across profiles: Firefox tab ids only count up within one profile. */
+export function tabKey(hello: Pick<SessionHelloParams, "instanceId" | "tabId">): string {
+  return `${hello.instanceId.slice(0, INSTANCE_PREFIX_LENGTH)}:${hello.tabId}`;
+}
 
 /**
- * Server-side session state machine + authoritative network buffer (SPEC §5.7).
- *
- * Transport-agnostic: WS lifecycle events and parsed ext→server notifications
- * are fed in; outgoing commands go through an injected sender. Connection-level
- * errors (NO_TAB_CONNECTED / NETWORK_INACTIVE / STALE_SESSION) are resolved
- * here with no round-trip (SPEC §6).
+ * One extension WebSocket = one devtools page on one tab (SPEC §5.7). Holds
+ * that tab's network buffer. Connection-level errors (NETWORK_INACTIVE /
+ * STALE_SESSION) are resolved here with no round-trip (SPEC §6).
  */
-export class SessionManager {
-  private state: SessionState = "disconnected";
-  private sessionId: string | undefined;
+export class TabSession {
+  private hello: SessionHelloParams | undefined;
+  private info: TabInfo = { url: "", title: "" };
   private networkActive = false;
   private readonly buffer = new RequestBuffer();
 
-  constructor(private readonly send: CommandSender) {}
+  constructor(
+    private readonly send: CommandSender,
+    private readonly onReady: (key: string, session: TabSession) => void = () => {},
+  ) {}
 
-  /** Send a server→ext command over the active connection. */
+  /** Defined once the hello handshake completed. */
+  get key(): string | undefined {
+    return this.hello && tabKey(this.hello);
+  }
+
   command<R = unknown>(method: string, params: unknown): Promise<R> {
     return this.send(method, params) as Promise<R>;
   }
 
-  // ── WS lifecycle ──────────────────────────────────────────────────────
-
-  onSocketConnect(): void {
-    this.state = "handshaking";
-  }
-
-  onSocketClose(): void {
-    this.state = "disconnected";
-    this.networkActive = false;
-  }
-
-  // ── ext→server notification dispatch ──────────────────────────────────
-
-  /** Route a parsed notification; returns a promise if it triggers a command. */
   handleNotification(method: string, params: unknown): void {
     switch (method) {
       case Notify.SESSION_HELLO:
@@ -73,14 +65,14 @@ export class SessionManager {
       case Notify.SESSION_NETWORK_STATE:
         this.networkActive = (params as SessionNetworkStateParams).active;
         break;
-      case Notify.SESSION_TAB_DISCONNECTED:
-        this.onTabDisconnected();
-        break;
-      case Notify.NETWORK_REQUEST_FINISHED: {
-        const p = params as NetworkRequestFinishedParams;
-        this.buffer.add(p.leanEntry);
+      case Notify.SESSION_TAB_UPDATED: {
+        const { url, title } = params as SessionTabUpdatedParams;
+        this.info = { url, title };
         break;
       }
+      case Notify.NETWORK_REQUEST_FINISHED:
+        this.buffer.add((params as NetworkRequestFinishedParams).leanEntry);
+        break;
       case Notify.NETWORK_NAVIGATED:
         if ((params as NetworkNavigatedParams).flushed) this.buffer.clear();
         break;
@@ -89,43 +81,31 @@ export class SessionManager {
   }
 
   private onHello(p: SessionHelloParams): void {
-    // protocolVersion guards future wire changes (SPEC §5.4): an incompatible
-    // extension is refused rather than silently half-attached.
+    // An incompatible extension is refused rather than half-attached (SPEC §5.4).
     if (p.protocolVersion !== PROTOCOL_VERSION) {
       console.error(
         `[bridge-server] rejecting hello: protocol ${p.protocolVersion} != ${PROTOCOL_VERSION}`,
       );
-      return; // stay handshaking; no ack, no ready
+      return;
     }
-    // A different sessionId means a new devtools page: the old buffer belongs
-    // to a dead session — drop it so stale ids can't rebind (SPEC §5.3).
-    // Same sessionId (server restart reconnect) keeps replay idempotent.
-    if (this.sessionId !== undefined && this.sessionId !== p.sessionId) {
-      this.buffer.clear();
-    }
-    this.sessionId = p.sessionId;
+    this.hello = p;
+    this.info = { url: p.url, title: p.title };
     this.networkActive = p.networkActive;
-    this.state = "ready";
-    // ack rides the server→ext command channel (SPEC §5.4)
     void this.send(Command.SESSION_ACK, { protocolVersion: PROTOCOL_VERSION });
+    this.onReady(tabKey(p), this);
   }
 
-  private onTabDisconnected(): void {
-    this.state = "no-tab";
-    this.networkActive = false;
-  }
-
-  // ── connection-level guards (no round-trip) ───────────────────────────
-
-  assertReady(): void {
-    if (this.state !== "ready")
-      // Code stays NO_TAB_CONNECTED (SPEC §6); the message pins the sub-state
-      // so the client can tell "server never dialed" from "devtools closed".
-      throw new BridgeError(ErrorCode.NO_TAB_CONNECTED, NO_TAB_HINT[this.state]);
+  summary(key: string, selected: boolean): TabSummary {
+    return {
+      tab: key,
+      ...this.info,
+      container: this.hello?.cookieStoreId,
+      networkActive: this.networkActive,
+      selected,
+    };
   }
 
   assertNetworkActive(): void {
-    this.assertReady();
     if (!this.networkActive)
       throw new BridgeError(
         ErrorCode.NETWORK_INACTIVE,
@@ -133,17 +113,64 @@ export class SessionManager {
       );
   }
 
-  /** Reject an id whose sessionId prefix != the current session (SPEC §5.3). */
+  /** Reject an id whose sessionId prefix != this devtools session (SPEC §5.3). */
   assertFreshId(id: string): void {
-    this.assertReady();
     const dot = id.lastIndexOf(".");
     const prefix = dot >= 0 ? id.slice(0, dot) : id;
-    if (this.sessionId === undefined || prefix !== this.sessionId)
+    if (prefix !== this.hello?.sessionId)
       throw new BridgeError(ErrorCode.STALE_SESSION);
   }
 
   list(filters?: RequestFilters): ListResult {
     this.assertNetworkActive();
     return this.buffer.list(filters);
+  }
+}
+
+/**
+ * Every tab connected to this server, from any Firefox profile, plus the one
+ * the MCP client picked. Tools never fall back to a tab on their own: picking
+ * one goes through `select_tab`, which the client can permission-gate.
+ */
+export class TabRegistry {
+  private readonly tabs = new Map<string, TabSession>();
+  private selectedKey: string | undefined;
+
+  attach(key: string, session: TabSession): void {
+    this.tabs.set(key, session);
+  }
+
+  detach(session: TabSession): void {
+    const key = session.key;
+    // a reconnect may already have replaced this session under the same key
+    if (key !== undefined && this.tabs.get(key) === session) this.tabs.delete(key);
+  }
+
+  list(): TabSummary[] {
+    return [...this.tabs].map(([key, s]) => s.summary(key, key === this.selectedKey));
+  }
+
+  select(key: string): TabSummary {
+    const session = this.tabs.get(key);
+    if (!session)
+      throw new BridgeError(ErrorCode.UNKNOWN_TAB, `no connected tab "${key}" — call list_tabs`);
+    this.selectedKey = key;
+    return session.summary(key, true);
+  }
+
+  /** The selected tab's session; the selection survives devtools being reopened. */
+  current(): TabSession {
+    if (this.selectedKey === undefined)
+      throw new BridgeError(
+        ErrorCode.NO_TAB_SELECTED,
+        "no tab selected — call list_tabs, then select_tab",
+      );
+    const session = this.tabs.get(this.selectedKey);
+    if (!session)
+      throw new BridgeError(
+        ErrorCode.TAB_DISCONNECTED,
+        `tab ${this.selectedKey} is not connected — reopen its DevTools or select_tab another`,
+      );
+    return session;
   }
 }

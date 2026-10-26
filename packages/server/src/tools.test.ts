@@ -5,7 +5,7 @@ import {
   PROTOCOL_VERSION,
   type LeanEntry,
 } from "../../shared/index.js";
-import { SessionManager } from "./session.js";
+import { TabRegistry, TabSession } from "./session.js";
 import { createToolHandlers } from "./tools.js";
 
 type Responder = (method: string, params: any) => unknown | Promise<unknown>;
@@ -13,15 +13,19 @@ type Responder = (method: string, params: any) => unknown | Promise<unknown>;
 function setup(responder: Responder, networkActive = true) {
   const send = (method: string, params: unknown) =>
     Promise.resolve(responder(method, params));
-  const sm = new SessionManager(send);
-  sm.onSocketConnect();
+  const registry = new TabRegistry();
+  const sm = new TabSession(send, (key, s) => registry.attach(key, s));
   sm.handleNotification(Notify.SESSION_HELLO, {
     protocolVersion: PROTOCOL_VERSION,
     sessionId: "sess",
+    instanceId: "3f9a1c22-0000-4000-8000-000000000000",
     tabId: 1,
+    url: "http://localhost:4200/",
+    title: "App",
     networkActive,
   });
-  return { sm, handlers: createToolHandlers(sm) };
+  registry.select("3f9a1c22:1");
+  return { sm, registry, handlers: createToolHandlers(registry) };
 }
 
 function payload(res: { content: { type: string; text?: string }[]; isError?: boolean }) {
@@ -43,6 +47,24 @@ function lean(id: string, over: Partial<LeanEntry> = {}): LeanEntry {
     ...over,
   };
 }
+
+describe("tab selection", () => {
+  it("list_tabs marks the selected tab", async () => {
+    const { handlers } = setup(() => ({}));
+    const { tabs } = payload(await handlers.list_tabs());
+    expect(tabs).toEqual([expect.objectContaining({ tab: "3f9a1c22:1", selected: true })]);
+  });
+
+  it("select_tab UNKNOWN_TAB for a foreign key", async () => {
+    const { handlers } = setup(() => ({}));
+    expect(payload(await handlers.select_tab({ tab: "x:1" })).code).toBe("UNKNOWN_TAB");
+  });
+
+  it("tools fail with NO_TAB_SELECTED before select_tab", async () => {
+    const handlers = createToolHandlers(new TabRegistry());
+    expect(payload(await handlers.screenshot_viewport()).code).toBe("NO_TAB_SELECTED");
+  });
+});
 
 describe("list_requests", () => {
   it("returns buffer entries", async () => {
@@ -136,14 +158,14 @@ describe("DOM tools", () => {
     expect(payload(await handlers.get_element()).code).toBe("NO_SELECTION");
   });
 
-  it("NO_TAB_CONNECTED when session not ready", async () => {
-    const { sm, handlers } = setup((m) => {
+  it("TAB_DISCONNECTED when the selected tab dropped", async () => {
+    const { sm, registry, handlers } = setup((m) => {
       if (m === Command.DOM_EVAL) return [{ ok: true, element: {} }];
       return {};
     });
-    sm.handleNotification(Notify.SESSION_TAB_DISCONNECTED, {});
+    registry.detach(sm);
     const res = await handlers.get_element({ selector: "div" });
-    expect(payload(res).code).toBe("NO_TAB_CONNECTED");
+    expect(payload(res).code).toBe("TAB_DISCONNECTED");
   });
 });
 

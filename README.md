@@ -11,14 +11,17 @@ Two processes joined by a WebSocket:
 - **Firefox extension (MV3)** — its devtools page owns `devtools.network` (HAR) and
   `inspectedWindow.eval`; its background page owns the WebSocket and `tabs.captureTab`.
 
-The extension dials out to `ws://127.0.0.1:8765`; the server pushes commands down the socket.
-Only the single tab whose devtools is open is served. See [SPEC.md](./SPEC.md) for the full
-design.
+Every MCP client session starts its own server, which listens on the first free port of
+`ws://127.0.0.1:8765`–`8774`. The extension, in every Firefox profile, connects each tab with
+DevTools open to every server it finds, so several clients can work on tabs from several
+profiles in parallel. A client picks its tab with `list_tabs` + `select_tab`. See
+[SPEC.md](./SPEC.md) for the full design.
 
 ## Tools
 
 | Category | Tools |
 |---|---|
+| Tabs | `list_tabs`, `select_tab` |
 | Network | `list_requests`, `get_request` |
 | DOM | `get_element`, `get_selected_element`, `get_computed_styles`, `dump_subtree` |
 | Screenshots | `screenshot_viewport`, `screenshot_element`, `screenshot_selected_element` |
@@ -44,8 +47,8 @@ npm run build -w @bridge/extension   # esbuild bundle → packages/extension/dis
 
 ## 1. Start the MCP server
 
-The server speaks MCP over **stdio** and listens for the extension on
-`ws://127.0.0.1:8765`.
+The server speaks MCP over **stdio** and listens for the extension on the first free port
+of `ws://127.0.0.1:8765`–`8774`. It exits when stdin closes.
 
 ```sh
 npm run build -w @bridge/server && npm run start -w @bridge/server
@@ -75,14 +78,12 @@ Then, in the tab you want to inspect (a `http://localhost/*` or `http://127.0.0.
 2. Open the **Network** panel and let at least one request land — network capture only
    arms after the panel is activated once.
 
-The extension auto-dials the server; `session.hello` establishes the tab. Watch the server's
-stderr for `extension connected`.
+The extension scans the port range every few seconds while DevTools is open and connects
+the tab to every server; `session.hello` establishes it. Watch the server's stderr for
+`tab <key> connected`.
 
-### Changing the port
-
-The port is defined once in `packages/shared/methods.ts` (`DEFAULT_WS_PORT = 8765`) and
-whitelisted in the manifest CSP (`packages/extension/static/manifest.json`, `connect-src`).
-Update both, then rebuild server and extension.
+The range is defined once in `packages/shared/methods.ts` (`SERVER_PORTS`); the manifest CSP
+allows any `ws://127.0.0.1` port.
 
 ## 3. Integrate with opencode
 
@@ -94,20 +95,26 @@ it at the built server entry:
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "firefox-bridge": {
-      "type": "local",
-      "command": ["node", "/absolute/path/to/firefox-mcp-bridge/packages/server/bundle/bridge-server.mjs"],
-      "enabled": true
+    "servers": {
+      "firefox-bridge": {
+        "type": "local",
+        "command": ["node", "/absolute/path/to/firefox-mcp-bridge/packages/server/bundle/bridge-server.mjs"]
+      }
     }
-  }
+  },
+  "permissions": [
+    { "action": "firefox-bridge_select_tab", "resource": "*", "effect": "ask" }
+  ]
 }
 ```
+
+The `ask` rule makes opencode confirm every tab the agent wants to work on. Tools never pick
+a tab on their own, even when only one is connected.
 
 Requires `npm run build -w @bridge/server` first so the bundle exists.
 
 opencode launches the server itself over stdio — don't also run it manually. Load the
-extension and open DevTools (steps 1–2) so a tab is attached before invoking the tools;
-otherwise calls return `NO_TAB_CONNECTED`.
+extension and open DevTools (steps 1–2) so a tab shows up in `list_tabs`.
 
 ## Development
 
@@ -139,13 +146,15 @@ Build the server bundle locally with `npm run build -w @bridge/server` →
 
 | Symptom | Cause / fix |
 |---|---|
-| `NO_TAB_CONNECTED` | DevTools not open on a served tab, or extension not connected. |
+| `NO_TAB_SELECTED` | Call `list_tabs`, then `select_tab`. |
+| `UNKNOWN_TAB` | That tab isn't connected — DevTools closed, or the key is from another server. |
+| `TAB_DISCONNECTED` | DevTools of the selected tab closed. Reopen it (the selection is kept) or select another. |
 | `NETWORK_INACTIVE` | Network panel never activated this session — open it once. |
 | `NO_MATCH` / `NO_SELECTION` | Selector matched nothing / no Inspector `$0` selection. |
-| Extension won't connect | Port mismatch (`DEFAULT_WS_PORT` vs manifest CSP), or page isn't `localhost`/`127.0.0.1`. |
+| Tab missing from `list_tabs` | DevTools not open on it, or all 10 ports taken by other servers. |
 
 ## Limitations
 
 Main frame only; network capture requires the Network panel activated once; screenshots are
-viewport + element only (no full-page stitch); single active tab. No page interaction beyond
+viewport + element only (no full-page stitch); at most 10 concurrent servers. No page interaction beyond
 `scrollIntoView` for element screenshots. See [SPEC.md §9](./SPEC.md#9-known-limitations).

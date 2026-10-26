@@ -1,16 +1,12 @@
 #!/usr/bin/env node
 import { appendFileSync } from "node:fs";
-import { WebSocketServer, type WebSocket } from "ws";
+import type { WebSocket } from "ws";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  BridgeError,
-  DEFAULT_WS_PORT,
-  ErrorCode,
-  type JsonRpcMessage,
-} from "../../shared/index.js";
-import { SessionManager, type CommandSender } from "./session.js";
+import { SERVER_PORTS, type JsonRpcMessage } from "../../shared/index.js";
+import { TabRegistry, TabSession } from "./session.js";
 import { JsonRpcPeer } from "./jsonRpcPeer.js";
+import { listenOnFirstFreePort } from "./listen.js";
 import { registerTools } from "./tools.js";
 
 const HOST = "127.0.0.1";
@@ -35,46 +31,31 @@ function log(...args: unknown[]): void {
 }
 
 async function main(): Promise<void> {
-  // The active extension WS connection (single tab, SPEC §1). Commands route
-  // to whichever peer is currently attached; none → NO_TAB_CONNECTED.
-  let activePeer: JsonRpcPeer | undefined;
-  const sendCommand: CommandSender = (method, params) =>
-    activePeer
-      ? activePeer.request(method, params)
-      : Promise.reject(new BridgeError(ErrorCode.NO_TAB_CONNECTED));
-
-  const session = new SessionManager(sendCommand);
+  const registry = new TabRegistry();
 
   const mcp = new McpServer({
     name: "firefox-mcp-bridge",
-    version: "0.1.0",
+    version: "0.2.0",
   });
-  registerTools(mcp, session);
+  registerTools(mcp, registry);
 
-  // ── WebSocket server (the extension dials in) ─────────────────────────
-  const wss = new WebSocketServer({ port: DEFAULT_WS_PORT, host: HOST });
-  wss.on("listening", () => log(`WS server listening on ws://${HOST}:${DEFAULT_WS_PORT}`));
-  wss.on("error", (err: NodeJS.ErrnoException) => {
-    // A failed bind (e.g. EADDRINUSE from a leftover server) leaves us running
-    // headless on stdio: no extension can ever attach, so every tool errors
-    // with NO_TAB_CONNECTED. Fail loudly instead of hiding the cause.
-    if (err.code === "EADDRINUSE") {
-      log(
-        `FATAL: port ${DEFAULT_WS_PORT} already in use — another bridge server is running. Stop it.`,
-      );
-      process.exit(1);
-    }
-    log("WS server error:", err);
-  });
+  // ── WebSocket server (one connection per devtools tab) ────────────────
+  const { wss, port } = await listenOnFirstFreePort(SERVER_PORTS, HOST);
+  log(`WS server listening on ws://${HOST}:${port}`);
+  wss.on("error", (err) => log("WS server error:", err));
 
   wss.on("connection", (ws: WebSocket) => {
-    log("extension connected");
     const peer = new JsonRpcPeer(
       (msg) => ws.send(JSON.stringify(msg)),
       (method, params) => session.handleNotification(method, params),
     );
-    activePeer = peer;
-    session.onSocketConnect();
+    const session = new TabSession(
+      (method, params) => peer.request(method, params),
+      (key, s) => {
+        log(`tab ${key} connected`);
+        registry.attach(key, s);
+      },
+    );
 
     ws.on("message", (data) => {
       let msg: JsonRpcMessage;
@@ -88,11 +69,8 @@ async function main(): Promise<void> {
     });
 
     ws.on("close", () => {
-      log("extension disconnected");
-      if (activePeer === peer) {
-        activePeer = undefined;
-        session.onSocketClose();
-      }
+      if (session.key) log(`tab ${session.key} disconnected`);
+      registry.detach(session);
       peer.rejectAll("socket closed");
     });
 
@@ -112,6 +90,8 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  // the open WS server would keep an orphan alive, holding a port from the range
+  process.stdin.on("end", shutdown);
 }
 
 main().catch((err) => {

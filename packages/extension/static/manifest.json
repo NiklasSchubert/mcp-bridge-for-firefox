@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MCP Bridge for Firefox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bridges the inspected page's Network/DOM data and screenshots to an MCP server.",
   "devtools_page": "devtools.html",
   "background": {
@@ -10,7 +10,7 @@
   "permissions": ["tabs"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; connect-src ws://localhost:8765 ws://127.0.0.1:8765"
+    "extension_pages": "script-src 'self'; connect-src ws://127.0.0.1:*"
   },
   "browser_specific_settings": {
     "gecko": {

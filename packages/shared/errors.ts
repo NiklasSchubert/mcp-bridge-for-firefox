@@ -1,12 +1,14 @@
 /**
- * The 7 typed error codes (SPEC §6). Two origins:
- *  - connection-level: resolved server-side from tracked session state.
+ * Typed error codes (SPEC §6). Two origins:
+ *  - connection-level: resolved server-side from tracked tab/session state.
  *  - execution-level:  returned inside a dom.* / network.* command response.
  */
 
 export const ErrorCode = {
   // connection-level
-  NO_TAB_CONNECTED: "NO_TAB_CONNECTED",
+  NO_TAB_SELECTED: "NO_TAB_SELECTED",
+  UNKNOWN_TAB: "UNKNOWN_TAB",
+  TAB_DISCONNECTED: "TAB_DISCONNECTED",
   NETWORK_INACTIVE: "NETWORK_INACTIVE",
   STALE_SESSION: "STALE_SESSION",
   // execution-level

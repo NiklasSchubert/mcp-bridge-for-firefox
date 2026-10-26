@@ -1,8 +1,14 @@
 /** Bumped whenever the wire contract changes incompatibly (SPEC §5.4). */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
-/** WebSocket port the extension dials; must match the manifest CSP (SPEC §7). */
-export const DEFAULT_WS_PORT = 8765;
+const FIRST_SERVER_PORT = 8765;
+const SERVER_PORT_COUNT = 10;
+
+/** Each server binds the first free one; the extension dials all of them (SPEC §5.8). */
+export const SERVER_PORTS: readonly number[] = Array.from(
+  { length: SERVER_PORT_COUNT },
+  (_, i) => FIRST_SERVER_PORT + i,
+);
 
 // ── Method name constants ───────────────────────────────────────────────
 
@@ -19,7 +25,7 @@ export type Command = (typeof Command)[keyof typeof Command];
 export const Notify = {
   SESSION_HELLO: "session.hello",
   SESSION_NETWORK_STATE: "session.networkState",
-  SESSION_TAB_DISCONNECTED: "session.tabDisconnected",
+  SESSION_TAB_UPDATED: "session.tabUpdated",
   NETWORK_REQUEST_FINISHED: "network.requestFinished",
   NETWORK_NAVIGATED: "network.navigated",
 } as const;
@@ -90,12 +96,29 @@ export interface CaptureTabResult {
 
 // ── Notification params ─────────────────────────────────────────────────
 
-export interface SessionHelloParams {
+export interface TabInfo {
+  url: string;
+  title: string;
+}
+
+export interface SessionHelloParams extends TabInfo {
   protocolVersion: number;
   sessionId: string;
+  /** moz-extension UUID: random per Firefox profile, stable across restarts. */
+  instanceId: string;
   tabId: number;
+  /** Firefox container of the tab. */
+  cookieStoreId?: string;
   networkActive: boolean;
 }
+
+/** The devtools page's share of the hello; the background adds tab identity. */
+export type DevtoolsHelloParams = Pick<
+  SessionHelloParams,
+  "protocolVersion" | "sessionId" | "networkActive"
+>;
+
+export type SessionTabUpdatedParams = TabInfo;
 
 export interface SessionNetworkStateParams {
   active: boolean;
