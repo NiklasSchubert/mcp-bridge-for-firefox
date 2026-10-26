@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Firefox MCP Bridge",
+  "name": "MCP Bridge for Firefox",
   "version": "0.1.0",
   "description": "Bridges the inspected page's Network/DOM data and screenshots to an MCP server.",
   "devtools_page": "devtools.html",
